@@ -1,0 +1,98 @@
+#Ignore GUIDS (Current Java Versions)
+$IgnoreGUIDs = @("{26A24AE4-039D-4CA4-87B4-2F64180112F0}", "{26A24AE4-039D-4CA4-87B4-2F32180112F0}")
+
+#Folders to ignore
+$ExcludedFolders = @("jre1.8.0_112")
+
+#GUIDs to find
+$GUIDs = @("{26A24AE4-039D-4CA4-87B4-*", "{3248F0A8-6813-11D6-A77B-*", "{7148F0A8-6813-11D6-A77B-*")
+
+$Log = ""
+
+function ExitScript
+{
+    Param($Log, [switch]$WhatIf)
+
+    if (-not $WhatIf)
+    {
+        $Log | Out-File "C:\Windows\Temp\JavaRemovalDetection.log" -ErrorAction SilentlyContinue
+        exit 0
+    }
+    else
+    {
+        Write-Host $Log
+    }
+}
+
+#Fix for Powershell 2.0. Searches through an array for an object.
+function Get-Contains
+{
+    Param([System.String[]]$Array, [String]$Object)
+    foreach($Item in $Array)
+    {
+        if ($Item -eq $Object)
+        {
+            return $true
+        }
+    }
+    return $false
+}
+
+#Search through the GUIDs
+$Found = @()
+foreach($GUID in $GUIDs)
+{
+	$Found += Get-ChildItem HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall | Where-Object -FilterScript {
+		$_.Name -like "HKEY_LOCAL_MACHINE\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\"+$GUID
+	}
+	$Found += Get-ChildItem HKLM:\SOFTWARE\Wow6432Node\Microsoft\Windows\CurrentVersion\Uninstall | Where-Object -FilterScript {
+		$_.Name -like "HKEY_LOCAL_MACHINE\SOFTWARE\Wow6432Node\Microsoft\Windows\CurrentVersion\Uninstall\"+$GUID
+	}
+    $Log+="Will search for: "+$Guid+"`r`n"
+}
+
+$Log+="Scanning registry versions`r`n"
+foreach($Java in $Found)
+{
+    if ($Java -ne $null)
+    {
+        if (-not (Get-Contains -Array $IgnoreGUIDs -Object $Java.PSChildName))
+        {
+            #Exit with message tells sccm that an application was found.
+            Write-Host ("Invalid Version Found: "+$Java.PSChildName)
+            $Log+="Invalid version found: "+$Java.PSChildName+"`r`n"
+            ExitScript -Log $Log
+        }
+        else
+        {
+            $Log+="Ignoring: "+$Java.PSChildName+"`r`n"
+        }
+    }
+}
+$Log+="Scanning sub folders`r`n"
+#Retrieve Java install directories
+$InstalledFolders = @()
+$InstalledFolders += Get-ChildItem -Path "C:\Program Files (x86)\Java" -ErrorAction SilentlyContinue
+$InstalledFolders += Get-ChildItem -Path "C:\Program Files\Java" -ErrorAction SilentlyContinue
+
+foreach ($InstalledFolder in $InstalledFolders)
+{
+    if ($InstalledFolder -ne $null)
+    {
+        if (-not (Get-Contains -Array $ExcludedFolders -Object $InstalledFolder.Name.ToLower()))
+        {
+            Write-Host ("Invalid folder found: "+$InstalledFolder.Name.ToLower())
+            $Log+="Invalid folder found: "+$InstalledFolder.Name.ToLower()+"`r`n"
+            ExitScript -Log $Log
+        }
+        else
+        {
+            $Log+="Skipping valid folder: "+$InstalledFolder.Name.ToLower()+"`r`n"
+        }
+    }
+}
+
+#We only reach this point if we have not found an old version
+#Exit without message says "not installed" to sccm
+$Log+="No invalid version found: All Good"
+ExitScript -Log $Log
